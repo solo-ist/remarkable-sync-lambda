@@ -46,15 +46,6 @@ resource "aws_iam_role_policy" "remarkable_lambda" {
           aws_secretsmanager_secret.api_key.arn
         ]
       },
-      {
-        # Call Textract for OCR
-        Effect = "Allow"
-        Action = [
-          "textract:DetectDocumentText",
-          "textract:AnalyzeDocument"
-        ]
-        Resource = "*"
-      }
     ]
   })
 }
@@ -64,8 +55,8 @@ resource "aws_iam_role_policy" "remarkable_lambda" {
 resource "aws_lambda_function" "remarkable_sync" {
   function_name = var.project_name
   role          = aws_iam_role.remarkable_lambda.arn
-  handler       = "handler.lambda_handler"
-  runtime       = "python3.11"
+  handler       = "handler.handler"
+  runtime       = "nodejs20.x"
   timeout       = var.lambda_timeout
   memory_size   = var.lambda_memory
 
@@ -87,8 +78,8 @@ data "archive_file" "lambda_placeholder" {
   output_path = "${path.module}/placeholder.zip"
 
   source {
-    content  = "def lambda_handler(event, context): return {'statusCode': 200, 'body': 'placeholder'}"
-    filename = "handler.py"
+    content  = "export const handler = async () => ({ statusCode: 200, body: 'placeholder' });"
+    filename = "handler.js"
   }
 }
 

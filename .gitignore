@@ -1,4 +1,9 @@
-# Python
+# Node.js
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python (legacy)
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,7 +15,6 @@ ENV/
 .env
 
 # Distribution
-dist/
 build/
 *.egg-info/
 
