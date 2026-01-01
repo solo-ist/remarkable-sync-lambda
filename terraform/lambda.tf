@@ -36,12 +36,15 @@ resource "aws_iam_role_policy" "remarkable_lambda" {
         Resource = "arn:aws:logs:*:*:*"
       },
       {
-        # Read rmapi config from Secrets Manager
+        # Read secrets from Secrets Manager
         Effect = "Allow"
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = aws_secretsmanager_secret.rmapi_config.arn
+        Resource = [
+          aws_secretsmanager_secret.rmapi_config.arn,
+          aws_secretsmanager_secret.api_key.arn
+        ]
       },
       {
         # Call Textract for OCR
@@ -73,6 +76,7 @@ resource "aws_lambda_function" "remarkable_sync" {
   environment {
     variables = {
       RMAPI_CONFIG_SECRET_ARN = aws_secretsmanager_secret.rmapi_config.arn
+      API_KEY_SECRET_ARN      = aws_secretsmanager_secret.api_key.arn
     }
   }
 }
