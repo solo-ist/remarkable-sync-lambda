@@ -36,23 +36,15 @@ resource "aws_iam_role_policy" "remarkable_lambda" {
         Resource = "arn:aws:logs:*:*:*"
       },
       {
-        # Read API key from Secrets Manager
+        # Read secrets from Secrets Manager
         Effect = "Allow"
         Action = [
           "secretsmanager:GetSecretValue"
         ]
         Resource = [
-          aws_secretsmanager_secret.api_key.arn
+          aws_secretsmanager_secret.api_key.arn,
+          aws_secretsmanager_secret.anthropic_api_key.arn
         ]
-      },
-      {
-        # OCR via AWS Textract
-        Effect = "Allow"
-        Action = [
-          "textract:DetectDocumentText",
-          "textract:AnalyzeDocument"
-        ]
-        Resource = "*"
       },
     ]
   })
@@ -74,7 +66,8 @@ resource "aws_lambda_function" "remarkable_sync" {
 
   environment {
     variables = {
-      API_KEY_SECRET_ARN = aws_secretsmanager_secret.api_key.arn
+      API_KEY_SECRET_ARN           = aws_secretsmanager_secret.api_key.arn
+      ANTHROPIC_API_KEY_SECRET_ARN = aws_secretsmanager_secret.anthropic_api_key.arn
     }
   }
 }

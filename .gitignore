@@ -34,7 +34,7 @@ htmlcov/
 *.tfstate
 *.tfstate.*
 *.tfvars
-!example.tfvars
+!*.tfvars.example
 
 # AWS SAM
 .aws-sam/

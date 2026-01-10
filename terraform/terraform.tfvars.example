@@ -1,0 +1,4 @@
+# Copy this file to terraform.tfvars and fill in your values
+# DO NOT commit terraform.tfvars to git
+
+anthropic_api_key = ""

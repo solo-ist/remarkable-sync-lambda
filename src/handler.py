@@ -16,8 +16,8 @@ MAX_PAGE_SIZE = 5 * 1024 * 1024  # 5MB per page
 
 from secrets import get_api_key
 from rm_renderer import extract_typed_text, render_rm_to_png, has_strokes
-from textract_client import extract_text
-from markdown_formatter import format_as_markdown, format_typed_text
+from claude_client import extract_text_from_image
+from markdown_formatter import format_typed_text
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -144,11 +144,9 @@ def process_page(page_id: str, base64_data: str) -> dict:
         logger.info(f"Page {page_id}: Rendering strokes for OCR")
         png_bytes = render_rm_to_png(rm_bytes)
 
-        text_blocks, avg_confidence = extract_text(png_bytes)
-        if text_blocks:
-            handwriting_md = format_as_markdown(text_blocks)
+        handwriting_md, confidence = extract_text_from_image(png_bytes)
+        if handwriting_md:
             markdown_parts.append(handwriting_md)
-            confidence = avg_confidence / 100.0  # Normalize to 0-1
 
     # Combine results
     markdown = "\n\n".join(filter(None, markdown_parts))
