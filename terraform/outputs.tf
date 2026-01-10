@@ -14,8 +14,3 @@ output "api_key_secret_arn" {
   description = "ARN of the API key secret (retrieve value with: aws secretsmanager get-secret-value)"
   value       = aws_secretsmanager_secret.api_key.arn
 }
-
-output "rmapi_config_secret_arn" {
-  description = "ARN of the rmapi config secret (you need to populate this)"
-  value       = aws_secretsmanager_secret.rmapi_config.arn
-}

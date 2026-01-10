@@ -6,24 +6,37 @@ set -e
 
 cd "$(dirname "$0")/.."
 
-echo "📦 Building TypeScript..."
-cd src
-npm run build
+PACKAGE_DIR="build/package"
+LAMBDA_ZIP="lambda.zip"
+FUNCTION_NAME="remarkable-sync"
+
+echo "🧹 Cleaning previous build..."
+rm -rf build "$LAMBDA_ZIP"
+mkdir -p "$PACKAGE_DIR"
+
+echo "📦 Installing Python dependencies for Lambda (linux x86_64)..."
+pip3 install -r src/requirements.txt -t "$PACKAGE_DIR" \
+  --platform manylinux2014_x86_64 \
+  --implementation cp \
+  --python-version 3.11 \
+  --only-binary=:all: \
+  --quiet
+
+echo "📦 Copying source files..."
+cp src/*.py "$PACKAGE_DIR/"
 
 echo "📦 Creating deployment package..."
-cd dist
-cp ../package.json .
-cp -r ../node_modules .
-zip -rq ../../lambda.zip . -x "*.map" -x "*.d.ts"
-rm -rf node_modules package.json
+cd "$PACKAGE_DIR"
+zip -rq "../../$LAMBDA_ZIP" . -x "*.pyc" -x "__pycache__/*" -x "*.dist-info/*"
 cd ../..
 
 echo "🚀 Deploying to Lambda..."
 aws lambda update-function-code \
-  --function-name remarkable-sync \
-  --zip-file fileb://lambda.zip \
+  --function-name "$FUNCTION_NAME" \
+  --zip-file "fileb://$LAMBDA_ZIP" \
   --output text
 
-rm lambda.zip
+echo "🧹 Cleaning up..."
+rm -rf build "$LAMBDA_ZIP"
 
 echo "✅ Deployment complete!"

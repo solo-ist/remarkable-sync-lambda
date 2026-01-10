@@ -1,59 +1,86 @@
-# reMarkable Sync Lambda
+# reMarkable OCR Lambda
 
-AWS Lambda service that syncs reMarkable tablet notebooks to markdown files via OCR.
+AWS Lambda service that converts reMarkable tablet notebook pages (.rm files) to markdown via OCR.
 
 ## Overview
 
 This service provides an HTTP endpoint that:
-1. Connects to reMarkable Cloud via [rmapi](https://github.com/juruen/rmapi)
-2. Downloads notebook files (.rm format)
-3. Converts handwriting to text using AWS Textract
-4. Returns markdown-formatted content
+1. Receives .rm page data (base64-encoded) from the Prose desktop app
+2. Extracts typed text directly when available (firmware v3.3+)
+3. Renders handwritten strokes to PNG using Pillow
+4. Converts handwriting to text using AWS Textract
+5. Returns markdown-formatted content with confidence scores
 
 ## Architecture
 
 ```
-Client (Prose app)
-    │
-    ▼
-Lambda Function URL (HTTPS + API Key)
-    │
-    ├── rmapi binary (Go, compiled for Amazon Linux 2)
-    │   └── Authenticates with reMarkable Cloud
-    │
-    ├── AWS Textract
-    │   └── OCR for handwriting recognition
-    │
-    └── AWS Secrets Manager
-        └── Stores rmapi auth tokens
+┌─────────────────────────────────────────────────────────────────┐
+│                        Prose Desktop                             │
+│  [Sync Button] ──► rmapi-js ──► Download .rm ──► Store locally  │
+│                                       │                          │
+│                                       ▼                          │
+│                              [When OCR needed]                   │
+│                                       │                          │
+└───────────────────────────────────────┼──────────────────────────┘
+                                        │
+                                        ▼
+                    ┌───────────────────────────────────────┐
+                    │     This Lambda (Python 3.11)         │
+                    │  Receive .rm ──► Parse ──► Render     │
+                    │              ──► OCR ──► Markdown     │
+                    └───────────────────────────────────────┘
 ```
+
+The Prose desktop app handles reMarkable Cloud authentication and notebook downloads via rmapi-js. This Lambda focuses solely on the OCR pipeline.
 
 ## API
 
-### POST /sync
+### POST /ocr
 
-Syncs all notebooks and returns markdown content.
+Process .rm page files and return extracted text as markdown.
 
 **Headers:**
 - `x-api-key`: Required API key for authentication
 
+**Request:**
+```json
+{
+  "pages": [
+    { "id": "page-uuid-1", "data": "<base64 .rm data>" },
+    { "id": "page-uuid-2", "data": "<base64 .rm data>" }
+  ]
+}
+```
+
 **Response:**
 ```json
 {
-  "syncedAt": "2025-01-01T12:00:00Z",
-  "files": [
+  "pages": [
     {
-      "path": "Meetings/2025-01-15 Standup.md",
-      "content": "---\nsource: remarkable\nsynced: 2025-01-01T12:00:00Z\n---\n\n# Content...",
-      "pages": 3
+      "id": "page-uuid-1",
+      "markdown": "# Meeting Notes\n\nDiscussed the Q1 roadmap...",
+      "confidence": 0.92
+    },
+    {
+      "id": "page-uuid-2",
+      "markdown": "## Action Items\n\n- Review PR by Friday...",
+      "confidence": 0.88
     }
   ]
 }
 ```
 
+**Error Response:**
+```json
+{
+  "error": "Failed to process page",
+  "failedPages": ["page-uuid-1"]
+}
+```
+
 ## Deployment
 
-Infrastructure managed with Terraform. See `terraform/` directory.
+### Infrastructure (Terraform)
 
 ```bash
 cd terraform
@@ -62,26 +89,42 @@ terraform plan
 terraform apply
 ```
 
+### Deploy Lambda Code
+
+```bash
+./scripts/deploy.sh
+```
+
 ## Local Development
 
 ```bash
 # Install dependencies
-pip install -r requirements.txt
+pip install -r src/requirements.txt
 
 # Run tests
 pytest
 
-# Local invoke (requires SAM CLI)
-sam local invoke
+# Run single test file
+pytest tests/test_handler.py -v
+
+# Test locally with a .rm file
+API_KEY=test-key ./scripts/test-local.sh path/to/page.rm
 ```
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `RMAPI_CONFIG_SECRET_ARN` | ARN of Secrets Manager secret containing rmapi config |
+| `API_KEY_SECRET_ARN` | ARN of Secrets Manager secret containing API key |
+| `API_KEY` | (Local only) API key for testing |
+
+## Dependencies
+
+- **rmscene** - Parse .rm v6 files from reMarkable tablets
+- **Pillow** - Render strokes to PNG images
+- **boto3** - AWS SDK for Textract and Secrets Manager
 
 ## Related
 
 - [Prose](https://github.com/solo-ist/prose) - Writing app that consumes this API
-- [rmapi](https://github.com/juruen/rmapi) - reMarkable Cloud API client
+- [rmscene](https://github.com/ricklupton/rmscene) - reMarkable file format parser

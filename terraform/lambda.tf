@@ -36,15 +36,23 @@ resource "aws_iam_role_policy" "remarkable_lambda" {
         Resource = "arn:aws:logs:*:*:*"
       },
       {
-        # Read secrets from Secrets Manager
+        # Read API key from Secrets Manager
         Effect = "Allow"
         Action = [
           "secretsmanager:GetSecretValue"
         ]
         Resource = [
-          aws_secretsmanager_secret.rmapi_config.arn,
           aws_secretsmanager_secret.api_key.arn
         ]
+      },
+      {
+        # OCR via AWS Textract
+        Effect = "Allow"
+        Action = [
+          "textract:DetectDocumentText",
+          "textract:AnalyzeDocument"
+        ]
+        Resource = "*"
       },
     ]
   })
@@ -56,7 +64,7 @@ resource "aws_lambda_function" "remarkable_sync" {
   function_name = var.project_name
   role          = aws_iam_role.remarkable_lambda.arn
   handler       = "handler.handler"
-  runtime       = "nodejs20.x"
+  runtime       = "python3.11"
   timeout       = var.lambda_timeout
   memory_size   = var.lambda_memory
 
@@ -66,8 +74,7 @@ resource "aws_lambda_function" "remarkable_sync" {
 
   environment {
     variables = {
-      RMAPI_CONFIG_SECRET_ARN = aws_secretsmanager_secret.rmapi_config.arn
-      API_KEY_SECRET_ARN      = aws_secretsmanager_secret.api_key.arn
+      API_KEY_SECRET_ARN = aws_secretsmanager_secret.api_key.arn
     }
   }
 }
@@ -78,8 +85,8 @@ data "archive_file" "lambda_placeholder" {
   output_path = "${path.module}/placeholder.zip"
 
   source {
-    content  = "export const handler = async () => ({ statusCode: 200, body: 'placeholder' });"
-    filename = "handler.js"
+    content  = "def handler(event, context): return {'statusCode': 200, 'body': 'placeholder'}"
+    filename = "handler.py"
   }
 }
 
