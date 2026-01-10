@@ -64,9 +64,8 @@ def format_line(text: str, bbox: dict) -> str:
     """Apply formatting to a single line based on patterns.
 
     Detects:
-    - Headings (larger text, typically at top)
     - List items (starting with -, *, numbers)
-    - Regular paragraphs
+    - Regular text (no automatic heading detection for handwriting)
     """
     # Detect list items
     if text.startswith(("- ", "* ", "• ")):
@@ -76,18 +75,8 @@ def format_line(text: str, bbox: dict) -> str:
     if len(text) > 2 and text[0].isdigit() and text[1] in ".)":
         return text
 
-    # Detect potential headings (short lines, larger relative height)
-    # This is a heuristic - larger handwriting often means headings
-    height = bbox["Height"]
-    width = bbox["Width"]
-
-    # Short, prominent lines might be headings
-    if width < 0.5 and height > 0.04 and len(text) < 50:
-        # Could be a heading - but let's be conservative
-        # Only format as heading if it looks like a title
-        if not text.endswith((".", ",", ";", ":")):
-            return f"## {text}"
-
+    # Return text as-is - don't try to guess headings from handwriting
+    # Textract can't distinguish heading vs body text in handwriting
     return text
 
 
