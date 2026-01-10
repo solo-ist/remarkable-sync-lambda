@@ -41,16 +41,15 @@ The Lambda uses a Function URL with API key auth (no API Gateway). Processing fl
 2. Parse .rm file using rmscene library
 3. Check for typed text → extract directly (no OCR needed)
 4. For handwriting → render strokes to PNG with Pillow
-5. Send PNG to Textract for OCR
-6. Format results as markdown
-7. Return JSON response with confidence scores
+5. Send PNG to Claude Vision API for OCR
+6. Return JSON response with markdown and confidence scores
 
 Key components:
 - `src/handler.py` — Lambda entry point, handles POST /ocr
 - `src/rm_renderer.py` — Parse .rm files, render strokes to PNG
-- `src/textract_client.py` — AWS Textract integration
-- `src/markdown_formatter.py` — Format OCR output as markdown
-- `src/secrets.py` — API key from Secrets Manager
+- `src/claude_client.py` — Claude Vision API for OCR
+- `src/markdown_formatter.py` — Format typed text output
+- `src/secrets.py` — API keys from Secrets Manager
 - `terraform/` — Infrastructure as code
 
 ## Environment Variables
@@ -58,13 +57,15 @@ Key components:
 | Variable | Description |
 |----------|-------------|
 | `API_KEY_SECRET_ARN` | ARN of Secrets Manager secret containing API key |
+| `ANTHROPIC_API_KEY_SECRET_ARN` | ARN of Secrets Manager secret containing Anthropic API key |
 | `API_KEY` | (Local testing) Override API key |
+| `ANTHROPIC_API_KEY` | (Local testing) Override Anthropic API key |
 
 ## Development Notes
 
-- Pure Python dependencies (rmscene, Pillow) — no native libraries needed
+- Pure Python dependencies (rmscene, Pillow, anthropic) — no native libraries needed
 - rmscene supports .rm v6 format (reMarkable firmware 3.x)
 - Typed text extracted directly from .rm files (firmware v3.3+)
-- Handwritten content rendered to PNG then OCR'd via Textract
+- Handwritten content rendered to PNG then OCR'd via Claude Vision API
 - Function URL requires `x-api-key` header for authentication
-- Textract works best with clear handwriting; messy writing may produce poor results
+- Claude Vision provides excellent handwriting recognition accuracy

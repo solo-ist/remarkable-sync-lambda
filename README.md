@@ -8,7 +8,7 @@ This service provides an HTTP endpoint that:
 1. Receives .rm page data (base64-encoded) from the Prose desktop app
 2. Extracts typed text directly when available (firmware v3.3+)
 3. Renders handwritten strokes to PNG using Pillow
-4. Converts handwriting to text using AWS Textract
+4. Converts handwriting to text using Claude Vision API
 5. Returns markdown-formatted content with confidence scores
 
 ## Architecture
@@ -116,13 +116,16 @@ API_KEY=test-key ./scripts/test-local.sh path/to/page.rm
 | Variable | Description |
 |----------|-------------|
 | `API_KEY_SECRET_ARN` | ARN of Secrets Manager secret containing API key |
+| `ANTHROPIC_API_KEY_SECRET_ARN` | ARN of Secrets Manager secret containing Anthropic API key |
 | `API_KEY` | (Local only) API key for testing |
+| `ANTHROPIC_API_KEY` | (Local only) Anthropic API key for testing |
 
 ## Dependencies
 
 - **rmscene** - Parse .rm v6 files from reMarkable tablets
 - **Pillow** - Render strokes to PNG images
-- **boto3** - AWS SDK for Textract and Secrets Manager
+- **anthropic** - Claude Vision API for OCR
+- **boto3** - AWS SDK for Secrets Manager
 
 ## Related
 
