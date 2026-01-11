@@ -1,159 +1,101 @@
 # reMarkable OCR Lambda
 
-AWS Lambda service that converts reMarkable tablet notebook pages (.rm files) to markdown via OCR.
-
-## Overview
-
-This service provides an HTTP endpoint that:
-1. Receives .rm page data (base64-encoded) from the Prose desktop app
-2. Extracts typed text directly when available (firmware v3.3+)
-3. Renders handwritten strokes to PNG using Pillow
-4. Converts handwriting to text using Claude Vision API
-5. Returns markdown-formatted content with confidence scores
-
-## Architecture
+Convert reMarkable tablet notebooks to markdown via Claude Vision.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Prose Desktop                             │
-│  [Sync Button] ──► rmapi-js ──► Download .rm ──► Store locally  │
-│                                       │                          │
-│                                       ▼                          │
-│                              [When OCR needed]                   │
-│                                       │                          │
-└───────────────────────────────────────┼──────────────────────────┘
-                                        │
-                                        ▼
-                    ┌───────────────────────────────────────┐
-                    │     This Lambda (Python 3.11)         │
-                    │  Receive .rm ──► Parse ──► Render     │
-                    │              ──► OCR ──► Markdown     │
-                    └───────────────────────────────────────┘
+Prose Desktop                          This Lambda
+┌────────────────────┐                ┌─────────────────────────┐
+│  Sync Button       │                │  .rm ──► Parse          │
+│       │            │   POST /ocr    │       ──► Render PNG    │
+│       ▼            │ ─────────────► │       ──► Claude Vision │
+│  rmapi-js          │                │       ──► Markdown      │
+│  Download .rm      │ ◄───────────── │                         │
+└────────────────────┘    JSON        └─────────────────────────┘
 ```
 
-The Prose desktop app handles reMarkable Cloud authentication and notebook downloads via rmapi-js. This Lambda focuses solely on the OCR pipeline.
+## How It Works
+
+1. **Typed text** — Extracted directly from .rm files (firmware v3.3+), no OCR needed
+2. **Handwriting** — Rendered to PNG, then OCR'd via Claude Vision API
+3. **Mixed pages** — Both methods combined, returned as unified markdown
 
 ## API
 
-### POST /ocr
+### `POST /ocr`
 
-Process .rm page files and return extracted text as markdown.
+**Headers**
+| Header | Required | Description |
+|--------|----------|-------------|
+| `x-api-key` | Yes | Lambda authentication |
+| `x-anthropic-key` | For handwriting | Your Anthropic API key (BYOK model) |
 
-**Headers:**
-- `x-api-key`: Required API key for Lambda authentication
-- `x-anthropic-key`: User's Anthropic API key (required for handwriting OCR)
-
-**Request:**
+**Request**
 ```json
 {
   "pages": [
-    { "id": "page-uuid-1", "data": "<base64 .rm data>" },
-    { "id": "page-uuid-2", "data": "<base64 .rm data>" }
+    { "id": "page-uuid", "data": "<base64 .rm data>" }
   ]
 }
 ```
 
-**Response:**
+**Response**
 ```json
 {
   "pages": [
     {
-      "id": "page-uuid-1",
+      "id": "page-uuid",
       "markdown": "# Meeting Notes\n\nDiscussed the Q1 roadmap...",
       "confidence": 0.92
-    },
-    {
-      "id": "page-uuid-2",
-      "markdown": "## Action Items\n\n- Review PR by Friday...",
-      "confidence": 0.88
     }
   ]
 }
 ```
 
-**Error Responses:**
-```json
-{
-  "error": "Failed to process page",
-  "failedPages": ["page-uuid-1"]
-}
-```
+**Errors**
+| Code | Description |
+|------|-------------|
+| `401` | Invalid or missing `x-api-key` |
+| `MISSING_ANTHROPIC_KEY` | Handwriting detected but no `x-anthropic-key` provided |
 
-```json
-{
-  "error": "Anthropic API key required for handwriting OCR. Provide x-anthropic-key header.",
-  "code": "MISSING_ANTHROPIC_KEY"
-}
+## Development
+
+```bash
+pip install -r src/requirements.txt   # Install deps
+pytest                                 # Run tests
+pytest tests/test_handler.py -v       # Single file
+API_KEY=test-key ./scripts/test-local.sh path/to/page.rm
 ```
 
 ## Deployment
 
-### Infrastructure (Terraform)
-
 ```bash
-cd terraform
-terraform init
-terraform plan
-terraform apply
-```
+# Infrastructure
+cd terraform && terraform init && terraform apply
 
-### Deploy Lambda Code
-
-```bash
+# Lambda code
 ./scripts/deploy.sh
-```
-
-## Local Development
-
-```bash
-# Install dependencies
-pip install -r src/requirements.txt
-
-# Run tests
-pytest
-
-# Run single test file
-pytest tests/test_handler.py -v
-
-# Test locally with a .rm file
-API_KEY=test-key ./scripts/test-local.sh path/to/page.rm
 ```
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `API_KEY_SECRET_ARN` | ARN of Secrets Manager secret containing Lambda auth key |
-| `API_KEY` | (Local only) Lambda auth key for testing |
-
-Note: Anthropic API keys are now provided per-request via the `x-anthropic-key` header.
-
-## Dependencies
-
-- **rmscene** - Parse .rm v6 files from reMarkable tablets
-- **Pillow** - Render strokes to PNG images
-- **anthropic** - Claude Vision API for OCR
-- **boto3** - AWS SDK for Secrets Manager
+| `API_KEY_SECRET_ARN` | Secrets Manager ARN for Lambda auth key |
+| `API_KEY` | Local override for testing |
 
 ## Security
 
-This Lambda uses a "bring your own API key" model for Claude Vision OCR:
+**Bring Your Own Key (BYOK)** — Users provide their Anthropic API key per-request via `x-anthropic-key`. Keys pass through to Anthropic but are never stored or logged. Typed-text-only pages skip Claude Vision entirely.
 
-- **Lambda auth key** (`x-api-key`): Shared key that authenticates requests to this Lambda
-- **User's Anthropic key** (`x-anthropic-key`): User provides their own key for OCR billing
+## Dependencies
 
-### Privacy Notes
-
-- User API keys are passed through this Lambda to Anthropic but are **not stored or logged**
-- All communication is encrypted via HTTPS
-- Keys exist only in memory during request processing
-- Users should understand their API key passes through this service
-
-### For Typed Text
-
-Pages with only typed text (no handwriting) are processed without calling Claude Vision, so no Anthropic key is required for those pages.
+| Package | Purpose |
+|---------|---------|
+| [rmscene](https://github.com/ricklupton/rmscene) | Parse .rm v6 files |
+| Pillow | Render strokes to PNG |
+| anthropic | Claude Vision API |
+| boto3 | AWS Secrets Manager |
 
 ## Related
 
-- [Prose](https://github.com/solo-ist/prose) - Writing app that consumes this API
-- [rmscene](https://github.com/ricklupton/rmscene) - reMarkable file format parser
+- [Prose](https://github.com/solo-ist/prose) — Writing app that consumes this API
