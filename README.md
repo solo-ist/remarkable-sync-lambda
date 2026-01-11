@@ -40,7 +40,8 @@ The Prose desktop app handles reMarkable Cloud authentication and notebook downl
 Process .rm page files and return extracted text as markdown.
 
 **Headers:**
-- `x-api-key`: Required API key for authentication
+- `x-api-key`: Required API key for Lambda authentication
+- `x-anthropic-key`: User's Anthropic API key (required for handwriting OCR)
 
 **Request:**
 ```json
@@ -70,11 +71,18 @@ Process .rm page files and return extracted text as markdown.
 }
 ```
 
-**Error Response:**
+**Error Responses:**
 ```json
 {
   "error": "Failed to process page",
   "failedPages": ["page-uuid-1"]
+}
+```
+
+```json
+{
+  "error": "Anthropic API key required for handwriting OCR. Provide x-anthropic-key header.",
+  "code": "MISSING_ANTHROPIC_KEY"
 }
 ```
 
@@ -115,10 +123,10 @@ API_KEY=test-key ./scripts/test-local.sh path/to/page.rm
 
 | Variable | Description |
 |----------|-------------|
-| `API_KEY_SECRET_ARN` | ARN of Secrets Manager secret containing API key |
-| `ANTHROPIC_API_KEY_SECRET_ARN` | ARN of Secrets Manager secret containing Anthropic API key |
-| `API_KEY` | (Local only) API key for testing |
-| `ANTHROPIC_API_KEY` | (Local only) Anthropic API key for testing |
+| `API_KEY_SECRET_ARN` | ARN of Secrets Manager secret containing Lambda auth key |
+| `API_KEY` | (Local only) Lambda auth key for testing |
+
+Note: Anthropic API keys are now provided per-request via the `x-anthropic-key` header.
 
 ## Dependencies
 
@@ -126,6 +134,24 @@ API_KEY=test-key ./scripts/test-local.sh path/to/page.rm
 - **Pillow** - Render strokes to PNG images
 - **anthropic** - Claude Vision API for OCR
 - **boto3** - AWS SDK for Secrets Manager
+
+## Security
+
+This Lambda uses a "bring your own API key" model for Claude Vision OCR:
+
+- **Lambda auth key** (`x-api-key`): Shared key that authenticates requests to this Lambda
+- **User's Anthropic key** (`x-anthropic-key`): User provides their own key for OCR billing
+
+### Privacy Notes
+
+- User API keys are passed through this Lambda to Anthropic but are **not stored or logged**
+- All communication is encrypted via HTTPS
+- Keys exist only in memory during request processing
+- Users should understand their API key passes through this service
+
+### For Typed Text
+
+Pages with only typed text (no handwriting) are processed without calling Claude Vision, so no Anthropic key is required for those pages.
 
 ## Related
 

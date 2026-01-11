@@ -53,6 +53,12 @@ def handler(event: dict, context: Any) -> dict:
         if not provided_key or not compare_digest(provided_key, expected_key):
             return error_response(401, "Invalid or missing API key")
 
+        # Extract user's Anthropic API key
+        anthropic_key = (
+            event.get("headers", {}).get("x-anthropic-key")
+            or event.get("headers", {}).get("X-Anthropic-Key")
+        )
+
         # Check HTTP method
         method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
         if method != "POST":
@@ -95,8 +101,19 @@ def handler(event: dict, context: Any) -> dict:
                 continue
 
             try:
-                result = process_page(page_id, page_data)
+                result = process_page(page_id, page_data, anthropic_key)
                 results.append(result)
+            except ValueError as e:
+                # Missing Anthropic key for handwriting - return specific error
+                if "Anthropic API key required" in str(e):
+                    return error_response(
+                        400,
+                        "Anthropic API key required for handwriting OCR. "
+                        "Provide x-anthropic-key header.",
+                        "MISSING_ANTHROPIC_KEY"
+                    )
+                logger.error(f"Error processing page {page_id}: {e}")
+                failed_pages.append(page_id)
             except Exception as e:
                 logger.error(f"Error processing page {page_id}: {e}")
                 failed_pages.append(page_id)
@@ -116,13 +133,18 @@ def handler(event: dict, context: Any) -> dict:
         return error_response(500, "Internal server error")
 
 
-def process_page(page_id: str, base64_data: str) -> dict:
+def process_page(page_id: str, base64_data: str, anthropic_key: str | None) -> dict:
     """Process a single page through the OCR pipeline.
 
     1. Decode base64 .rm data
     2. Try to extract typed text directly
     3. If handwriting present, render to PNG and OCR
     4. Format as markdown
+
+    Args:
+        page_id: Unique identifier for the page
+        base64_data: Base64-encoded .rm file data
+        anthropic_key: User's Anthropic API key for OCR (required for handwriting)
     """
     # Decode .rm data
     rm_bytes = base64.b64decode(base64_data)
@@ -141,10 +163,13 @@ def process_page(page_id: str, base64_data: str) -> dict:
 
     # Process handwriting if present
     if has_handwriting:
+        if not anthropic_key:
+            raise ValueError("Anthropic API key required for handwriting OCR")
+
         logger.info(f"Page {page_id}: Rendering strokes for OCR")
         png_bytes = render_rm_to_png(rm_bytes)
 
-        handwriting_md, confidence = extract_text_from_image(png_bytes)
+        handwriting_md, confidence = extract_text_from_image(png_bytes, anthropic_key)
         if handwriting_md:
             markdown_parts.append(handwriting_md)
 
@@ -158,10 +183,13 @@ def process_page(page_id: str, base64_data: str) -> dict:
     }
 
 
-def error_response(status_code: int, message: str) -> dict:
+def error_response(status_code: int, message: str, code: str | None = None) -> dict:
     """Create an error response."""
+    body = {"error": message}
+    if code:
+        body["code"] = code
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},
-        "body": json.dumps({"error": message}),
+        "body": json.dumps(body),
     }

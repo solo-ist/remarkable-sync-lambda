@@ -19,6 +19,14 @@ def test_error_response():
     assert body["error"] == "Bad request"
 
 
+def test_error_response_with_code():
+    """Error response includes code when provided."""
+    result = error_response(400, "Missing key", "MISSING_ANTHROPIC_KEY")
+    body = json.loads(result["body"])
+    assert body["error"] == "Missing key"
+    assert body["code"] == "MISSING_ANTHROPIC_KEY"
+
+
 def test_missing_api_key():
     """Request without API key returns 401."""
     with patch("handler.get_api_key", return_value="test-key"):
