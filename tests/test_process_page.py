@@ -11,6 +11,8 @@ import base64
 import sys
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 sys.path.insert(0, "src")
 
 from handler import process_page
@@ -77,11 +79,8 @@ class TestProcessPageHandwriting:
         with patch("handler.extract_typed_text", return_value=None), \
              patch("handler.has_strokes", return_value=True):
 
-            try:
+            with pytest.raises(ValueError, match="Anthropic API key required"):
                 process_page("page-1", rm_data, anthropic_key=None)
-                assert False, "Should have raised ValueError"
-            except ValueError as e:
-                assert "Anthropic API key required" in str(e)
 
     def test_handwriting_empty_ocr_result(self):
         """Empty OCR result still returns valid response."""
@@ -131,6 +130,22 @@ class TestProcessPageMixedContent:
 
             # Typed text should come before handwriting
             assert result["markdown"].index("FIRST") < result["markdown"].index("SECOND")
+
+    def test_mixed_content_empty_handwriting_result(self):
+        """Typed text returned even when handwriting OCR is empty."""
+        rm_data = base64.b64encode(b"fake rm data").decode()
+
+        with patch("handler.extract_typed_text", return_value="Typed content"), \
+             patch("handler.has_strokes", return_value=True), \
+             patch("handler.render_rm_to_png", return_value=b"png"), \
+             patch("handler.extract_text_from_image", return_value=("", 0.3)):
+
+            result = process_page("page-1", rm_data, anthropic_key="sk-test")
+
+            # Should still return typed text
+            assert result["markdown"] == "Typed content"
+            # Confidence reflects handwriting (low confidence)
+            assert result["confidence"] == 0.3
 
 
 class TestProcessPageEmptyPage:
