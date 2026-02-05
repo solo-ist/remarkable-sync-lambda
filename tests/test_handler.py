@@ -107,3 +107,105 @@ def test_base64_encoded_body():
         }
         result = handler(event, None)
         assert result["statusCode"] == 200
+
+
+# --- Error handling edge cases ---
+
+def test_invalid_json_body():
+    """Invalid JSON returns 400 with parse error."""
+    with patch("handler.get_api_key", return_value="test-key"):
+        event = {
+            "headers": {"x-api-key": "test-key"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": "not valid json {{{",
+        }
+        result = handler(event, None)
+        assert result["statusCode"] == 400
+        body = json.loads(result["body"])
+        assert "Invalid JSON" in body["error"]
+
+
+def test_too_many_pages():
+    """Request with too many pages returns 400."""
+    with patch("handler.get_api_key", return_value="test-key"):
+        # Create 21 pages (exceeds MAX_PAGES=20)
+        pages = [{"id": f"page-{i}", "data": "dGVzdA=="} for i in range(21)]
+        event = {
+            "headers": {"x-api-key": "test-key"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"pages": pages}),
+        }
+        result = handler(event, None)
+        assert result["statusCode"] == 400
+        body = json.loads(result["body"])
+        assert "Too many pages" in body["error"]
+
+
+def test_page_exceeds_size_limit():
+    """Oversized page is added to failedPages."""
+    with patch("handler.get_api_key", return_value="test-key"), \
+         patch("handler.MAX_PAGE_SIZE", 10):  # Set tiny limit for test
+
+        # Create page larger than limit
+        large_data = base64.b64encode(b"x" * 100).decode()
+        event = {
+            "headers": {"x-api-key": "test-key"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"pages": [{"id": "big-page", "data": large_data}]}),
+        }
+        result = handler(event, None)
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert "big-page" in body.get("failedPages", [])
+
+
+def test_empty_page_data():
+    """Page with empty data is added to failedPages."""
+    with patch("handler.get_api_key", return_value="test-key"):
+        event = {
+            "headers": {"x-api-key": "test-key"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"pages": [{"id": "empty-page", "data": ""}]}),
+        }
+        result = handler(event, None)
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert "empty-page" in body.get("failedPages", [])
+
+
+def test_missing_anthropic_key_for_handwriting():
+    """Missing Anthropic key for handwriting returns specific error."""
+    with patch("handler.get_api_key", return_value="test-key"), \
+         patch("handler.extract_typed_text", return_value=None), \
+         patch("handler.has_strokes", return_value=True):
+
+        event = {
+            "headers": {"x-api-key": "test-key"},  # No x-anthropic-key
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({
+                "pages": [{"id": "hw-page", "data": base64.b64encode(b"test").decode()}]
+            }),
+        }
+        result = handler(event, None)
+        assert result["statusCode"] == 400
+        body = json.loads(result["body"])
+        assert body["code"] == "MISSING_ANTHROPIC_KEY"
+        assert "x-anthropic-key" in body["error"]
+
+
+def test_process_page_exception_adds_to_failed():
+    """Generic exception in process_page adds to failedPages."""
+    with patch("handler.get_api_key", return_value="test-key"), \
+         patch("handler.process_page", side_effect=Exception("Unexpected error")):
+
+        event = {
+            "headers": {"x-api-key": "test-key"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({
+                "pages": [{"id": "error-page", "data": base64.b64encode(b"test").decode()}]
+            }),
+        }
+        result = handler(event, None)
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert "error-page" in body.get("failedPages", [])
