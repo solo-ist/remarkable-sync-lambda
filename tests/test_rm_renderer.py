@@ -76,26 +76,227 @@ def test_render_produces_png():
 
 
 def test_render_with_strokes():
-    """Render draws strokes when present."""
-    # Create mock block with lines
-    mock_point = MagicMock()
-    mock_point.x = 100
-    mock_point.y = 100
+    """Render draws strokes when present (v6 format)."""
+    # Create mock block matching rmscene v6 format:
+    # block.item.value.points, block.item.value.color, etc.
+    mock_point1 = MagicMock()
+    mock_point1.x = 100
+    mock_point1.y = 100
 
     mock_point2 = MagicMock()
     mock_point2.x = 200
     mock_point2.y = 200
 
     mock_line = MagicMock()
-    mock_line.points = [mock_point, mock_point2]
+    mock_line.points = [mock_point1, mock_point2]
     mock_line.color = 0
-    mock_line.brush_size = 2
+    mock_line.thickness_scale = 2
+
+    # v6 structure: block.item.value = line
+    mock_item = MagicMock()
+    mock_item.value = mock_line
 
     mock_block = MagicMock()
-    mock_block.lines = [mock_line]
+    mock_block.item = mock_item
 
     with patch("rm_renderer.read_blocks", return_value=[mock_block]):
         result = render_rm_to_png(b"fake rm data")
 
         # Should produce valid PNG
         assert result[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_render_applies_x_offset():
+    """Render applies X_OFFSET for center-origin coordinate system."""
+    from rm_renderer import X_OFFSET
+
+    # Create stroke at x=0 (center in reMarkable coords)
+    mock_point1 = MagicMock()
+    mock_point1.x = 0  # Center in reMarkable = X_OFFSET in image
+    mock_point1.y = 100
+
+    mock_point2 = MagicMock()
+    mock_point2.x = 100
+    mock_point2.y = 100
+
+    mock_line = MagicMock()
+    mock_line.points = [mock_point1, mock_point2]
+    mock_line.color = 0
+    mock_line.thickness_scale = 2
+
+    mock_item = MagicMock()
+    mock_item.value = mock_line
+    mock_block = MagicMock()
+    mock_block.item = mock_item
+
+    with patch("rm_renderer.read_blocks", return_value=[mock_block]), \
+         patch("rm_renderer.ImageDraw.Draw") as mock_draw_class:
+
+        mock_draw = MagicMock()
+        mock_draw_class.return_value = mock_draw
+
+        render_rm_to_png(b"fake rm data")
+
+        # Verify draw.line was called
+        mock_draw.line.assert_called()
+        call_args = mock_draw.line.call_args
+
+        # First argument is points list
+        points = call_args[0][0]
+
+        # x=0 should become x=X_OFFSET (702)
+        assert points[0][0] == X_OFFSET
+        # x=100 should become x=X_OFFSET+100
+        assert points[1][0] == X_OFFSET + 100
+
+
+def test_render_color_mapping():
+    """Render maps color indices to correct colors."""
+    # Test each color
+    for color_idx, expected_color in [(0, "black"), (1, "#808080"), (2, "white")]:
+        mock_point1 = MagicMock(x=0, y=0)
+        mock_point2 = MagicMock(x=100, y=100)
+
+        mock_line = MagicMock()
+        mock_line.points = [mock_point1, mock_point2]
+        mock_line.color = color_idx
+        mock_line.thickness_scale = 2
+
+        mock_item = MagicMock()
+        mock_item.value = mock_line
+        mock_block = MagicMock()
+        mock_block.item = mock_item
+
+        with patch("rm_renderer.read_blocks", return_value=[mock_block]), \
+             patch("rm_renderer.ImageDraw.Draw") as mock_draw_class:
+
+            mock_draw = MagicMock()
+            mock_draw_class.return_value = mock_draw
+
+            render_rm_to_png(b"fake rm data")
+
+            # Verify correct fill color was used
+            call_kwargs = mock_draw.line.call_args[1]
+            assert call_kwargs["fill"] == expected_color, f"Color {color_idx} should be {expected_color}"
+
+
+def test_render_unknown_color_defaults_to_black():
+    """Unknown color index defaults to black."""
+    mock_point1 = MagicMock(x=0, y=0)
+    mock_point2 = MagicMock(x=100, y=100)
+
+    mock_line = MagicMock()
+    mock_line.points = [mock_point1, mock_point2]
+    mock_line.color = 99  # Unknown color
+    mock_line.thickness_scale = 2
+
+    mock_item = MagicMock()
+    mock_item.value = mock_line
+    mock_block = MagicMock()
+    mock_block.item = mock_item
+
+    with patch("rm_renderer.read_blocks", return_value=[mock_block]), \
+         patch("rm_renderer.ImageDraw.Draw") as mock_draw_class:
+
+        mock_draw = MagicMock()
+        mock_draw_class.return_value = mock_draw
+
+        render_rm_to_png(b"fake rm data")
+
+        call_kwargs = mock_draw.line.call_args[1]
+        assert call_kwargs["fill"] == "black"
+
+
+def test_render_stroke_width():
+    """Render uses thickness_scale for stroke width."""
+    mock_point1 = MagicMock(x=0, y=0)
+    mock_point2 = MagicMock(x=100, y=100)
+
+    mock_line = MagicMock()
+    mock_line.points = [mock_point1, mock_point2]
+    mock_line.color = 0
+    mock_line.thickness_scale = 5
+
+    mock_item = MagicMock()
+    mock_item.value = mock_line
+    mock_block = MagicMock()
+    mock_block.item = mock_item
+
+    with patch("rm_renderer.read_blocks", return_value=[mock_block]), \
+         patch("rm_renderer.ImageDraw.Draw") as mock_draw_class:
+
+        mock_draw = MagicMock()
+        mock_draw_class.return_value = mock_draw
+
+        render_rm_to_png(b"fake rm data")
+
+        call_kwargs = mock_draw.line.call_args[1]
+        assert call_kwargs["width"] == 5
+
+
+def test_render_stroke_width_minimum():
+    """Stroke width has minimum of 1."""
+    mock_point1 = MagicMock(x=0, y=0)
+    mock_point2 = MagicMock(x=100, y=100)
+
+    mock_line = MagicMock()
+    mock_line.points = [mock_point1, mock_point2]
+    mock_line.color = 0
+    mock_line.thickness_scale = 0.5  # Less than 1
+
+    mock_item = MagicMock()
+    mock_item.value = mock_line
+    mock_block = MagicMock()
+    mock_block.item = mock_item
+
+    with patch("rm_renderer.read_blocks", return_value=[mock_block]), \
+         patch("rm_renderer.ImageDraw.Draw") as mock_draw_class:
+
+        mock_draw = MagicMock()
+        mock_draw_class.return_value = mock_draw
+
+        render_rm_to_png(b"fake rm data")
+
+        call_kwargs = mock_draw.line.call_args[1]
+        assert call_kwargs["width"] >= 1
+
+
+def test_render_skips_single_point_strokes():
+    """Strokes with less than 2 points are skipped."""
+    mock_point = MagicMock(x=0, y=0)
+
+    mock_line = MagicMock()
+    mock_line.points = [mock_point]  # Only 1 point
+    mock_line.color = 0
+
+    mock_item = MagicMock()
+    mock_item.value = mock_line
+    mock_block = MagicMock()
+    mock_block.item = mock_item
+
+    with patch("rm_renderer.read_blocks", return_value=[mock_block]), \
+         patch("rm_renderer.ImageDraw.Draw") as mock_draw_class:
+
+        mock_draw = MagicMock()
+        mock_draw_class.return_value = mock_draw
+
+        render_rm_to_png(b"fake rm data")
+
+        # draw.line should not be called for single-point stroke
+        mock_draw.line.assert_not_called()
+
+
+def test_has_strokes_v6_format():
+    """has_strokes detects strokes in v6 format."""
+    mock_point = MagicMock(x=0, y=0)
+
+    mock_line = MagicMock()
+    mock_line.points = [mock_point]
+
+    mock_item = MagicMock()
+    mock_item.value = mock_line
+    mock_block = MagicMock()
+    mock_block.item = mock_item
+
+    with patch("rm_renderer.read_blocks", return_value=[mock_block]):
+        assert has_strokes(b"fake rm data") is True
