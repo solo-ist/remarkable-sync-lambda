@@ -29,7 +29,7 @@ def test_error_response_with_code():
 
 def test_missing_api_key():
     """Request without API key returns 401."""
-    with patch("handler.get_api_key", return_value="test-key"):
+    with patch("handler.get_api_keys", return_value=["test-key"]):
         event = {
             "headers": {},
             "requestContext": {"http": {"method": "POST"}},
@@ -40,7 +40,7 @@ def test_missing_api_key():
 
 def test_invalid_api_key():
     """Request with wrong API key returns 401."""
-    with patch("handler.get_api_key", return_value="correct-key"):
+    with patch("handler.get_api_keys", return_value=["correct-key"]):
         event = {
             "headers": {"x-api-key": "wrong-key"},
             "requestContext": {"http": {"method": "POST"}},
@@ -49,9 +49,37 @@ def test_invalid_api_key():
         assert result["statusCode"] == 401
 
 
+def test_grace_period_key_accepted():
+    """During rotation, old (grace-period) key is still accepted."""
+    with patch("handler.get_api_keys", return_value=["new-key", "old-key"]), \
+         patch("handler.process_page", return_value={"id": "t", "markdown": "", "confidence": 1.0}):
+
+        event = {
+            "headers": {"x-api-key": "old-key"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"pages": [{"id": "t", "data": base64.b64encode(b"x").decode()}]}),
+        }
+        result = handler(event, None)
+        assert result["statusCode"] == 200
+
+
+def test_primary_key_accepted_during_rotation():
+    """During rotation, new (primary) key is accepted."""
+    with patch("handler.get_api_keys", return_value=["new-key", "old-key"]), \
+         patch("handler.process_page", return_value={"id": "t", "markdown": "", "confidence": 1.0}):
+
+        event = {
+            "headers": {"x-api-key": "new-key"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"pages": [{"id": "t", "data": base64.b64encode(b"x").decode()}]}),
+        }
+        result = handler(event, None)
+        assert result["statusCode"] == 200
+
+
 def test_wrong_method():
     """Non-POST request returns 405."""
-    with patch("handler.get_api_key", return_value="test-key"):
+    with patch("handler.get_api_keys", return_value=["test-key"]):
         event = {
             "headers": {"x-api-key": "test-key"},
             "requestContext": {"http": {"method": "GET"}},
@@ -62,7 +90,7 @@ def test_wrong_method():
 
 def test_no_pages():
     """Request with no pages returns 400."""
-    with patch("handler.get_api_key", return_value="test-key"):
+    with patch("handler.get_api_keys", return_value=["test-key"]):
         event = {
             "headers": {"x-api-key": "test-key"},
             "requestContext": {"http": {"method": "POST"}},
@@ -74,7 +102,7 @@ def test_no_pages():
 
 def test_valid_request_structure():
     """Valid request returns proper response structure."""
-    with patch("handler.get_api_key", return_value="test-key"), \
+    with patch("handler.get_api_keys", return_value=["test-key"]), \
          patch("handler.process_page", return_value={"id": "test", "markdown": "Hello", "confidence": 0.95}):
 
         event = {
@@ -93,7 +121,7 @@ def test_valid_request_structure():
 
 def test_base64_encoded_body():
     """Handler decodes base64-encoded body."""
-    with patch("handler.get_api_key", return_value="test-key"), \
+    with patch("handler.get_api_keys", return_value=["test-key"]), \
          patch("handler.process_page", return_value={"id": "test", "markdown": "Hello", "confidence": 0.95}):
 
         body = json.dumps({
@@ -113,7 +141,7 @@ def test_base64_encoded_body():
 
 def test_invalid_json_body():
     """Invalid JSON returns 400 with parse error."""
-    with patch("handler.get_api_key", return_value="test-key"):
+    with patch("handler.get_api_keys", return_value=["test-key"]):
         event = {
             "headers": {"x-api-key": "test-key"},
             "requestContext": {"http": {"method": "POST"}},
@@ -127,7 +155,7 @@ def test_invalid_json_body():
 
 def test_too_many_pages():
     """Request with too many pages returns 400."""
-    with patch("handler.get_api_key", return_value="test-key"):
+    with patch("handler.get_api_keys", return_value=["test-key"]):
         # Create 21 pages (exceeds MAX_PAGES=20)
         pages = [{"id": f"page-{i}", "data": "dGVzdA=="} for i in range(21)]
         event = {
@@ -143,7 +171,7 @@ def test_too_many_pages():
 
 def test_page_exceeds_size_limit():
     """Oversized page is added to failedPages."""
-    with patch("handler.get_api_key", return_value="test-key"), \
+    with patch("handler.get_api_keys", return_value=["test-key"]), \
          patch("handler.MAX_PAGE_SIZE", 10):  # Set tiny limit for test
 
         # Create page larger than limit
@@ -161,7 +189,7 @@ def test_page_exceeds_size_limit():
 
 def test_empty_page_data():
     """Page with empty data is added to failedPages."""
-    with patch("handler.get_api_key", return_value="test-key"):
+    with patch("handler.get_api_keys", return_value=["test-key"]):
         event = {
             "headers": {"x-api-key": "test-key"},
             "requestContext": {"http": {"method": "POST"}},
@@ -175,7 +203,7 @@ def test_empty_page_data():
 
 def test_missing_anthropic_key_for_handwriting():
     """Missing Anthropic key for handwriting returns specific error."""
-    with patch("handler.get_api_key", return_value="test-key"), \
+    with patch("handler.get_api_keys", return_value=["test-key"]), \
          patch("handler.extract_typed_text", return_value=None), \
          patch("handler.has_strokes", return_value=True):
 
@@ -195,7 +223,7 @@ def test_missing_anthropic_key_for_handwriting():
 
 def test_process_page_exception_adds_to_failed():
     """Generic exception in process_page adds to failedPages."""
-    with patch("handler.get_api_key", return_value="test-key"), \
+    with patch("handler.get_api_keys", return_value=["test-key"]), \
          patch("handler.process_page", side_effect=Exception("Unexpected error")):
 
         event = {

@@ -14,7 +14,7 @@ from typing import Any
 MAX_PAGES = 20
 MAX_PAGE_SIZE = 5 * 1024 * 1024  # 5MB per page
 
-from secrets import get_api_key
+from secrets import get_api_keys
 from rm_renderer import extract_typed_text, render_rm_to_png, has_strokes
 from claude_client import extract_text_from_image
 from markdown_formatter import format_typed_text
@@ -43,15 +43,25 @@ def handler(event: dict, context: Any) -> dict:
     }
     """
     try:
-        # Validate API key
+        # Validate API key against all valid keys (supports dual-key rotation)
         provided_key = (
             event.get("headers", {}).get("x-api-key")
             or event.get("headers", {}).get("X-Api-Key")
         )
-        expected_key = get_api_key()
+        valid_keys = get_api_keys()
 
-        if not provided_key or not compare_digest(provided_key, expected_key):
+        if not provided_key:
             return error_response(401, "Invalid or missing API key")
+
+        key_index = next(
+            (i for i, k in enumerate(valid_keys) if compare_digest(provided_key, k)),
+            -1,
+        )
+        if key_index < 0:
+            return error_response(401, "Invalid or missing API key")
+
+        if key_index > 0:
+            logger.info("Authenticated with grace-period key (rotation pending)")
 
         # Extract user's Anthropic API key
         anthropic_key = (

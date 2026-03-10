@@ -13,6 +13,9 @@ resource "random_password" "api_key" {
 }
 
 # Store the generated API key
+# Note: The rotation script (scripts/rotate-key.sh) transitions this to a
+# JSON array format ["new-key", "old-key"] for dual-key grace periods.
+# The Lambda handles both plain string and JSON array formats.
 resource "aws_secretsmanager_secret_version" "api_key" {
   secret_id     = aws_secretsmanager_secret.api_key.id
   secret_string = random_password.api_key.result
