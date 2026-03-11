@@ -40,7 +40,7 @@ def get_api_keys() -> list[str]:
         return [api_key]
 
     # Return cached keys if still valid
-    if _cached_keys and (time.monotonic() - _cache_time) < CACHE_TTL_SECONDS:
+    if _cached_keys is not None and (time.monotonic() - _cache_time) < CACHE_TTL_SECONDS:
         return _cached_keys
 
     # Get from Secrets Manager
@@ -58,7 +58,7 @@ def get_api_keys() -> list[str]:
         if isinstance(parsed, list):
             _cached_keys = parsed
         else:
-            _cached_keys = [secret_string]
+            _cached_keys = [parsed]
     except (json.JSONDecodeError, TypeError):
         _cached_keys = [secret_string]
 

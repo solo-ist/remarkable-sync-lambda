@@ -50,9 +50,10 @@ def test_invalid_api_key():
 
 
 def test_grace_period_key_accepted():
-    """During rotation, old (grace-period) key is still accepted."""
+    """During rotation, old (grace-period) key is still accepted and logged."""
     with patch("handler.get_api_keys", return_value=["new-key", "old-key"]), \
-         patch("handler.process_page", return_value={"id": "t", "markdown": "", "confidence": 1.0}):
+         patch("handler.process_page", return_value={"id": "t", "markdown": "", "confidence": 1.0}), \
+         patch("handler.logger") as mock_logger:
 
         event = {
             "headers": {"x-api-key": "old-key"},
@@ -61,6 +62,7 @@ def test_grace_period_key_accepted():
         }
         result = handler(event, None)
         assert result["statusCode"] == 200
+        mock_logger.info.assert_any_call("Authenticated with grace-period key (rotation pending)")
 
 
 def test_primary_key_accepted_during_rotation():
