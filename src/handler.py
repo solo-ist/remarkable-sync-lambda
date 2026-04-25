@@ -7,8 +7,11 @@ and returns formatted markdown.
 import base64
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from hmac import compare_digest
 from typing import Any
+
+import anthropic
 
 # Request limits to prevent DoS
 MAX_PAGES = 20
@@ -63,10 +66,15 @@ def handler(event: dict, context: Any) -> dict:
         if key_index > 0:
             logger.info("Authenticated with grace-period key (rotation pending)")
 
-        # Extract user's Anthropic API key
+        # Extract user's Anthropic API key and instantiate one client per
+        # Lambda invocation. Reusing the client across pages amortizes
+        # TLS handshake and HTTP connection-pool setup over the request.
         anthropic_key = (
             event.get("headers", {}).get("x-anthropic-key")
             or event.get("headers", {}).get("X-Anthropic-Key")
+        )
+        anthropic_client = (
+            anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
         )
 
         # Check HTTP method
@@ -93,10 +101,13 @@ def handler(event: dict, context: Any) -> dict:
 
         logger.info(f"Processing {len(pages)} pages")
 
-        # Process each page
         results = []
         failed_pages = []
 
+        # Pre-validate cheap checks (missing data, size) before spawning threads
+        # so we don't burn a worker just to short-circuit. Pages that pass
+        # validation get submitted to the pool.
+        valid_pages = []
         for page in pages:
             page_id = page.get("id", "unknown")
             page_data = page.get("data", "")
@@ -110,23 +121,51 @@ def handler(event: dict, context: Any) -> dict:
                 failed_pages.append(page_id)
                 continue
 
-            try:
-                result = process_page(page_id, page_data, anthropic_key)
-                results.append(result)
-            except ValueError as e:
-                # Missing Anthropic key for handwriting - return specific error
-                if "Anthropic API key required" in str(e):
-                    return error_response(
-                        400,
-                        "Anthropic API key required for handwriting OCR. "
-                        "Provide x-anthropic-key header.",
-                        "MISSING_ANTHROPIC_KEY"
-                    )
-                logger.error(f"Error processing page {page_id}: {e}")
-                failed_pages.append(page_id)
-            except Exception as e:
-                logger.error(f"Error processing page {page_id}: {e}")
-                failed_pages.append(page_id)
+            valid_pages.append((page_id, page_data))
+
+        # Process pages in parallel. Prose batches at BATCH_SIZE=5 (ocr.ts:245)
+        # so 5 workers matches the wire contract; oversizing wastes RAM with no
+        # latency win since each worker is I/O-bound waiting on Claude.
+        #
+        # MISSING_ANTHROPIC_KEY policy: whole-batch abort with HTTP 400. Pages
+        # in a batch share the same client/user, so a missing key fails every
+        # handwriting page anyway. Cancelling pending futures avoids spending
+        # any further Anthropic-side cost for typed-only pages we'd discard.
+        missing_key_response: dict | None = None
+
+        if valid_pages:
+            with ThreadPoolExecutor(max_workers=min(5, len(valid_pages))) as executor:
+                future_to_id = {
+                    executor.submit(process_page, page_id, page_data, anthropic_client): page_id
+                    for page_id, page_data in valid_pages
+                }
+                for future in as_completed(future_to_id):
+                    page_id = future_to_id[future]
+                    try:
+                        results.append(future.result())
+                    except ValueError as e:
+                        if "Anthropic API key required" in str(e):
+                            # Cancel any not-yet-started futures. In-flight
+                            # Claude calls cannot be killed by concurrent.futures
+                            # but the `with` block's shutdown will wait for them
+                            # to drain.
+                            for f in future_to_id:
+                                f.cancel()
+                            missing_key_response = error_response(
+                                400,
+                                "Anthropic API key required for handwriting OCR. "
+                                "Provide x-anthropic-key header.",
+                                "MISSING_ANTHROPIC_KEY",
+                            )
+                            break
+                        logger.error(f"Error processing page {page_id}: {e}")
+                        failed_pages.append(page_id)
+                    except Exception as e:
+                        logger.error(f"Error processing page {page_id}: {e}")
+                        failed_pages.append(page_id)
+
+        if missing_key_response is not None:
+            return missing_key_response
 
         response_body = {"pages": results}
         if failed_pages:
@@ -143,7 +182,11 @@ def handler(event: dict, context: Any) -> dict:
         return error_response(500, "Internal server error")
 
 
-def process_page(page_id: str, base64_data: str, anthropic_key: str | None) -> dict:
+def process_page(
+    page_id: str,
+    base64_data: str,
+    anthropic_client: anthropic.Anthropic | None,
+) -> dict:
     """Process a single page through the OCR pipeline.
 
     1. Decode base64 .rm data
@@ -154,7 +197,8 @@ def process_page(page_id: str, base64_data: str, anthropic_key: str | None) -> d
     Args:
         page_id: Unique identifier for the page
         base64_data: Base64-encoded .rm file data
-        anthropic_key: User's Anthropic API key for OCR (required for handwriting)
+        anthropic_client: Anthropic client for OCR (required for handwriting;
+            None is allowed for typed-only pages)
     """
     # Decode .rm data
     rm_bytes = base64.b64decode(base64_data)
@@ -173,13 +217,13 @@ def process_page(page_id: str, base64_data: str, anthropic_key: str | None) -> d
 
     # Process handwriting if present
     if has_handwriting:
-        if not anthropic_key:
+        if anthropic_client is None:
             raise ValueError("Anthropic API key required for handwriting OCR")
 
         logger.info(f"Page {page_id}: Rendering strokes for OCR")
         png_bytes = render_rm_to_png(rm_bytes)
 
-        handwriting_md, confidence = extract_text_from_image(png_bytes, anthropic_key)
+        handwriting_md, confidence = extract_text_from_image(png_bytes, anthropic_client)
         if handwriting_md:
             markdown_parts.append(handwriting_md)
 

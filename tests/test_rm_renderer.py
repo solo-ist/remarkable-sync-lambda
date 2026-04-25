@@ -13,6 +13,7 @@ sys.path.insert(0, "src")
 from rm_renderer import (
     RM_WIDTH,
     RM_HEIGHT,
+    RENDER_SCALE,
     BRUSH_COLORS,
     extract_typed_text,
     render_rm_to_png,
@@ -21,9 +22,13 @@ from rm_renderer import (
 
 
 def test_constants():
-    """Verify reMarkable dimensions are correct."""
+    """Verify reMarkable native dimensions and a sane render scale."""
+    # Native device dimensions — these reflect the reMarkable coordinate
+    # system, not the rendered output size.
     assert RM_WIDTH == 1404
     assert RM_HEIGHT == 1872
+    # Output scale must be in (0, 1]; values >1 would up-sample without benefit.
+    assert 0 < RENDER_SCALE <= 1.0
 
 
 def test_brush_colors():
@@ -106,8 +111,8 @@ def test_render_with_strokes():
         assert result[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_render_applies_x_offset():
-    """Render applies X_OFFSET for center-origin coordinate system."""
+def test_render_applies_x_offset_unscaled():
+    """At scale=1.0, X_OFFSET maps reMarkable center-origin to image pixels."""
     from rm_renderer import X_OFFSET
 
     # Create stroke at x=0 (center in reMarkable coords)
@@ -135,7 +140,7 @@ def test_render_applies_x_offset():
         mock_draw = MagicMock()
         mock_draw_class.return_value = mock_draw
 
-        render_rm_to_png(b"fake rm data")
+        render_rm_to_png(b"fake rm data", scale=1.0)
 
         # Verify draw.line was called
         mock_draw.line.assert_called()
@@ -148,6 +153,57 @@ def test_render_applies_x_offset():
         assert points[0][0] == X_OFFSET
         # x=100 should become x=X_OFFSET+100
         assert points[1][0] == X_OFFSET + 100
+
+
+def test_render_applies_x_offset_scaled():
+    """At scale=0.5, X_OFFSET and stroke positions all scale uniformly."""
+    from rm_renderer import X_OFFSET
+
+    mock_point1 = MagicMock(x=0, y=200)
+    mock_point2 = MagicMock(x=100, y=300)
+
+    mock_line = MagicMock()
+    mock_line.points = [mock_point1, mock_point2]
+    mock_line.color = 0
+    mock_line.thickness_scale = 2
+
+    mock_item = MagicMock()
+    mock_item.value = mock_line
+    mock_block = MagicMock()
+    mock_block.item = mock_item
+
+    with patch("rm_renderer.read_blocks", return_value=[mock_block]), \
+         patch("rm_renderer.ImageDraw.Draw") as mock_draw_class:
+
+        mock_draw = MagicMock()
+        mock_draw_class.return_value = mock_draw
+
+        render_rm_to_png(b"fake rm data", scale=0.5)
+
+        points = mock_draw.line.call_args[0][0]
+
+        # x=0 (center) → X_OFFSET * 0.5 = 351
+        assert points[0][0] == X_OFFSET * 0.5
+        # x=100 → (100 + X_OFFSET) * 0.5 = 401
+        assert points[1][0] == (100 + X_OFFSET) * 0.5
+        # y values also scale: 200 → 100, 300 → 150
+        assert points[0][1] == 100
+        assert points[1][1] == 150
+
+
+def test_render_default_scale_produces_grayscale_image():
+    """Default render output is single-channel grayscale at half resolution."""
+    from PIL import Image
+    from io import BytesIO as _BytesIO
+
+    with patch("rm_renderer.read_blocks", return_value=[]):
+        png_bytes = render_rm_to_png(b"fake rm data")
+
+    img = Image.open(_BytesIO(png_bytes))
+    # "L" = 8-bit grayscale; 3x smaller pixel payload than "RGB"
+    assert img.mode == "L"
+    # Default scale 0.5 → 702 × 936
+    assert img.size == (int(RM_WIDTH * RENDER_SCALE), int(RM_HEIGHT * RENDER_SCALE))
 
 
 def test_render_color_mapping():
@@ -207,8 +263,8 @@ def test_render_unknown_color_defaults_to_black():
         assert call_kwargs["fill"] == "black"
 
 
-def test_render_stroke_width():
-    """Render uses thickness_scale for stroke width."""
+def test_render_stroke_width_unscaled():
+    """At scale=1.0, render uses thickness_scale verbatim for stroke width."""
     mock_point1 = MagicMock(x=0, y=0)
     mock_point2 = MagicMock(x=100, y=100)
 
@@ -228,10 +284,37 @@ def test_render_stroke_width():
         mock_draw = MagicMock()
         mock_draw_class.return_value = mock_draw
 
-        render_rm_to_png(b"fake rm data")
+        render_rm_to_png(b"fake rm data", scale=1.0)
 
         call_kwargs = mock_draw.line.call_args[1]
         assert call_kwargs["width"] == 5
+
+
+def test_render_stroke_width_scales_with_canvas():
+    """Stroke widths shrink proportionally with the render scale."""
+    mock_point1 = MagicMock(x=0, y=0)
+    mock_point2 = MagicMock(x=100, y=100)
+
+    mock_line = MagicMock()
+    mock_line.points = [mock_point1, mock_point2]
+    mock_line.color = 0
+    mock_line.thickness_scale = 6  # 6 * 0.5 = 3
+
+    mock_item = MagicMock()
+    mock_item.value = mock_line
+    mock_block = MagicMock()
+    mock_block.item = mock_item
+
+    with patch("rm_renderer.read_blocks", return_value=[mock_block]), \
+         patch("rm_renderer.ImageDraw.Draw") as mock_draw_class:
+
+        mock_draw = MagicMock()
+        mock_draw_class.return_value = mock_draw
+
+        render_rm_to_png(b"fake rm data", scale=0.5)
+
+        call_kwargs = mock_draw.line.call_args[1]
+        assert call_kwargs["width"] == 3
 
 
 def test_render_stroke_width_minimum():
