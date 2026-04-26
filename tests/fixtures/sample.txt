@@ -1,0 +1,20 @@
+# Ground truth for sample.rm — handwriting captured from a reMarkable tablet
+# and synced via the Prose desktop app on 2026-04-25. The page contains a
+# vertical list of distinctive tokens; this transcription comes from the
+# notebook's pageOCRCache (confidence=1 from Prose's production pipeline).
+#
+# Matching is case-insensitive substring, so multi-word phrases are split
+# into their constituent words to make the test robust against OCR variation
+# in word boundaries (e.g. "timemachine" still matches "time" and "machine").
+penguin
+parallel
+lambda
+47
+telescope
+obsidian
+fortune
+time
+machine
+Buddhism
+glacier
+Alaska
