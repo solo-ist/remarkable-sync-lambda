@@ -29,7 +29,7 @@ class TestProcessPageTypedTextOnly:
              patch("handler.has_strokes", return_value=False), \
              patch("handler.extract_text_from_image") as mock_claude:
 
-            result = process_page("page-1", rm_data, anthropic_key=None)
+            result = process_page("page-1", rm_data, anthropic_client=None)
 
             # Should not call Claude for typed-only pages
             mock_claude.assert_not_called()
@@ -38,15 +38,14 @@ class TestProcessPageTypedTextOnly:
             assert "Hello World" in result["markdown"]
             assert result["confidence"] == 1.0
 
-    def test_typed_text_no_anthropic_key_required(self):
-        """Typed-only pages work without Anthropic key."""
+    def test_typed_text_no_anthropic_client_required(self):
+        """Typed-only pages work without an Anthropic client."""
         rm_data = base64.b64encode(b"fake rm data").decode()
 
         with patch("handler.extract_typed_text", return_value="Test content"), \
              patch("handler.has_strokes", return_value=False):
 
-            # Should not raise even without anthropic_key
-            result = process_page("page-1", rm_data, anthropic_key=None)
+            result = process_page("page-1", rm_data, anthropic_client=None)
             assert result["markdown"] == "Test content"
 
 
@@ -57,41 +56,43 @@ class TestProcessPageHandwriting:
         """Handwriting pages render to PNG and call Claude."""
         rm_data = base64.b64encode(b"fake rm data").decode()
         mock_png = b"\x89PNG\r\n\x1a\nfake png data"
+        mock_client = MagicMock()
 
         with patch("handler.extract_typed_text", return_value=None), \
              patch("handler.has_strokes", return_value=True), \
              patch("handler.render_rm_to_png", return_value=mock_png) as mock_render, \
              patch("handler.extract_text_from_image", return_value=("Handwritten text", 0.92)) as mock_claude:
 
-            result = process_page("page-1", rm_data, anthropic_key="sk-test-key")
+            result = process_page("page-1", rm_data, anthropic_client=mock_client)
 
             mock_render.assert_called_once()
-            mock_claude.assert_called_once_with(mock_png, "sk-test-key")
+            mock_claude.assert_called_once_with(mock_png, mock_client)
 
             assert result["id"] == "page-1"
             assert result["markdown"] == "Handwritten text"
             assert result["confidence"] == 0.92
 
-    def test_handwriting_without_key_raises_error(self):
-        """Handwriting pages require Anthropic key."""
+    def test_handwriting_without_client_raises_error(self):
+        """Handwriting pages require an Anthropic client."""
         rm_data = base64.b64encode(b"fake rm data").decode()
 
         with patch("handler.extract_typed_text", return_value=None), \
              patch("handler.has_strokes", return_value=True):
 
             with pytest.raises(ValueError, match="Anthropic API key required"):
-                process_page("page-1", rm_data, anthropic_key=None)
+                process_page("page-1", rm_data, anthropic_client=None)
 
     def test_handwriting_empty_ocr_result(self):
         """Empty OCR result still returns valid response."""
         rm_data = base64.b64encode(b"fake rm data").decode()
+        mock_client = MagicMock()
 
         with patch("handler.extract_typed_text", return_value=None), \
              patch("handler.has_strokes", return_value=True), \
              patch("handler.render_rm_to_png", return_value=b"png"), \
              patch("handler.extract_text_from_image", return_value=("", 0.5)):
 
-            result = process_page("page-1", rm_data, anthropic_key="sk-test")
+            result = process_page("page-1", rm_data, anthropic_client=mock_client)
 
             assert result["markdown"] == ""
             assert result["confidence"] == 0.5
@@ -103,13 +104,14 @@ class TestProcessPageMixedContent:
     def test_mixed_content_combines_results(self):
         """Pages with both typed and handwriting combine both."""
         rm_data = base64.b64encode(b"fake rm data").decode()
+        mock_client = MagicMock()
 
         with patch("handler.extract_typed_text", return_value="Typed header"), \
              patch("handler.has_strokes", return_value=True), \
              patch("handler.render_rm_to_png", return_value=b"png"), \
              patch("handler.extract_text_from_image", return_value=("Handwritten notes", 0.88)):
 
-            result = process_page("page-1", rm_data, anthropic_key="sk-test")
+            result = process_page("page-1", rm_data, anthropic_client=mock_client)
 
             # Both should be present, separated by double newline
             assert "Typed header" in result["markdown"]
@@ -120,13 +122,14 @@ class TestProcessPageMixedContent:
     def test_mixed_content_order(self):
         """Typed text appears before handwriting in output."""
         rm_data = base64.b64encode(b"fake rm data").decode()
+        mock_client = MagicMock()
 
         with patch("handler.extract_typed_text", return_value="FIRST"), \
              patch("handler.has_strokes", return_value=True), \
              patch("handler.render_rm_to_png", return_value=b"png"), \
              patch("handler.extract_text_from_image", return_value=("SECOND", 0.9)):
 
-            result = process_page("page-1", rm_data, anthropic_key="sk-test")
+            result = process_page("page-1", rm_data, anthropic_client=mock_client)
 
             # Typed text should come before handwriting
             assert result["markdown"].index("FIRST") < result["markdown"].index("SECOND")
@@ -134,13 +137,14 @@ class TestProcessPageMixedContent:
     def test_mixed_content_empty_handwriting_result(self):
         """Typed text returned even when handwriting OCR is empty."""
         rm_data = base64.b64encode(b"fake rm data").decode()
+        mock_client = MagicMock()
 
         with patch("handler.extract_typed_text", return_value="Typed content"), \
              patch("handler.has_strokes", return_value=True), \
              patch("handler.render_rm_to_png", return_value=b"png"), \
              patch("handler.extract_text_from_image", return_value=("", 0.3)):
 
-            result = process_page("page-1", rm_data, anthropic_key="sk-test")
+            result = process_page("page-1", rm_data, anthropic_client=mock_client)
 
             # Should still return typed text
             assert result["markdown"] == "Typed content"
@@ -158,7 +162,7 @@ class TestProcessPageEmptyPage:
         with patch("handler.extract_typed_text", return_value=None), \
              patch("handler.has_strokes", return_value=False):
 
-            result = process_page("page-1", rm_data, anthropic_key=None)
+            result = process_page("page-1", rm_data, anthropic_client=None)
 
             assert result["id"] == "page-1"
             assert result["markdown"] == ""

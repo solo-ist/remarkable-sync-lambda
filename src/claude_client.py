@@ -56,7 +56,7 @@ NO_TEXT_INDICATORS = [
 ]
 
 
-def extract_text_from_image(png_bytes: bytes, api_key: str) -> tuple[str, float]:
+def extract_text_from_image(png_bytes: bytes, client: anthropic.Anthropic) -> tuple[str, float]:
     """Extract text from PNG using Claude Vision API.
 
     For pages with text: returns extracted markdown
@@ -65,14 +65,13 @@ def extract_text_from_image(png_bytes: bytes, api_key: str) -> tuple[str, float]
 
     Args:
         png_bytes: PNG image data as bytes
-        api_key: User's Anthropic API key
+        client: Anthropic client (caller owns lifecycle; reuse across pages
+            in one Lambda invocation amortizes TLS/connection setup)
 
     Returns:
         tuple of (markdown_text, confidence)
         Confidence is always 1.0 since Claude doesn't provide per-line scores
     """
-    client = anthropic.Anthropic(api_key=api_key)
-
     base64_image = base64.b64encode(png_bytes).decode("utf-8")
 
     logger.info(f"Sending image to Claude ({len(png_bytes)} bytes)")
@@ -112,7 +111,7 @@ def extract_text_from_image(png_bytes: bytes, api_key: str) -> tuple[str, float]
 
     # If drawings detected, add illustration marker
     if has_drawings:
-        description = describe_illustration(png_bytes, api_key)
+        description = describe_illustration(png_bytes, client)
         marker = f"[illustration: {description}]"
         if extracted_text:
             # Mixed content: text + illustration marker
@@ -146,17 +145,16 @@ def _parse_extraction_response(text: str) -> tuple[str, bool]:
     return cleaned_text, has_drawings
 
 
-def describe_illustration(png_bytes: bytes, api_key: str) -> str:
+def describe_illustration(png_bytes: bytes, client: anthropic.Anthropic) -> str:
     """Generate brief description of drawing.
 
     Args:
         png_bytes: PNG image data as bytes
-        api_key: User's Anthropic API key
+        client: Anthropic client (caller owns lifecycle)
 
     Returns:
         Short description string (5 words or fewer)
     """
-    client = anthropic.Anthropic(api_key=api_key)
     base64_image = base64.b64encode(png_bytes).decode("utf-8")
 
     logger.info(f"Describing illustration from image ({len(png_bytes)} bytes)")

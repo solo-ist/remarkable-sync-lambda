@@ -239,3 +239,103 @@ def test_process_page_exception_adds_to_failed():
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert "error-page" in body.get("failedPages", [])
+
+
+# --- Parallel processing ---
+
+def test_pages_processed_in_parallel():
+    """Multiple pages execute concurrently rather than sequentially."""
+    import threading
+    import time
+
+    barrier = threading.Barrier(3)
+
+    def slow_page(page_id, page_data, anthropic_client):
+        # All 3 workers must hit the barrier before any can proceed.
+        # If processing were sequential, this would deadlock since only
+        # the first worker would ever reach the barrier.
+        barrier.wait(timeout=2.0)
+        return {"id": page_id, "markdown": "ok", "confidence": 1.0}
+
+    with patch("handler.get_api_keys", return_value=["test-key"]), \
+         patch("handler.process_page", side_effect=slow_page):
+
+        pages = [
+            {"id": f"page-{i}", "data": base64.b64encode(b"x").decode()}
+            for i in range(3)
+        ]
+        event = {
+            "headers": {"x-api-key": "test-key"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"pages": pages}),
+        }
+        start = time.monotonic()
+        result = handler(event, None)
+        elapsed = time.monotonic() - start
+
+        assert result["statusCode"] == 200
+        assert elapsed < 1.5, f"Pages did not run concurrently (took {elapsed:.2f}s)"
+        body = json.loads(result["body"])
+        assert len(body["pages"]) == 3
+
+
+def test_anthropic_client_reused_across_pages():
+    """One Anthropic client is created per request and shared across pages."""
+    captured_clients = []
+
+    def capture_client(page_id, page_data, anthropic_client):
+        captured_clients.append(anthropic_client)
+        return {"id": page_id, "markdown": "", "confidence": 1.0}
+
+    with patch("handler.get_api_keys", return_value=["test-key"]), \
+         patch("handler.anthropic.Anthropic") as mock_anthropic_ctor, \
+         patch("handler.process_page", side_effect=capture_client):
+
+        sentinel_client = MagicMock(name="sentinel")
+        mock_anthropic_ctor.return_value = sentinel_client
+
+        pages = [
+            {"id": f"page-{i}", "data": base64.b64encode(b"x").decode()}
+            for i in range(4)
+        ]
+        event = {
+            "headers": {
+                "x-api-key": "test-key",
+                "x-anthropic-key": "sk-user-key",
+            },
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"pages": pages}),
+        }
+        handler(event, None)
+
+        # Constructor called exactly once, with the user's key.
+        mock_anthropic_ctor.assert_called_once_with(api_key="sk-user-key")
+        # Every page received the same client instance.
+        assert len(captured_clients) == 4
+        assert all(c is sentinel_client for c in captured_clients)
+
+
+def test_missing_anthropic_key_aborts_under_parallelism():
+    """One page raising MISSING_ANTHROPIC_KEY aborts the whole batch with 400."""
+    def selective_raise(page_id, page_data, anthropic_client):
+        if page_id == "hw-1":
+            raise ValueError("Anthropic API key required for handwriting OCR")
+        return {"id": page_id, "markdown": "typed", "confidence": 1.0}
+
+    with patch("handler.get_api_keys", return_value=["test-key"]), \
+         patch("handler.process_page", side_effect=selective_raise):
+
+        pages = [
+            {"id": "typed-1", "data": base64.b64encode(b"x").decode()},
+            {"id": "hw-1", "data": base64.b64encode(b"y").decode()},
+            {"id": "typed-2", "data": base64.b64encode(b"z").decode()},
+        ]
+        event = {
+            "headers": {"x-api-key": "test-key"},  # No x-anthropic-key
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"pages": pages}),
+        }
+        result = handler(event, None)
+        assert result["statusCode"] == 400
+        body = json.loads(result["body"])
+        assert body["code"] == "MISSING_ANTHROPIC_KEY"

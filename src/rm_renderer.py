@@ -9,14 +9,21 @@ from PIL import Image, ImageDraw
 from rmscene import read_blocks
 from rmscene.scene_items import Line, Text
 
-# reMarkable page dimensions in pixels
+# reMarkable native page dimensions in pixels (do not change — these reflect
+# the device coordinate system, not the rendered output size).
 RM_WIDTH = 1404
 RM_HEIGHT = 1872
 
 # Coordinate system offset (reMarkable uses center origin for X)
 X_OFFSET = RM_WIDTH / 2  # 702
 
-# Brush colors (reMarkable uses 0=black, 1=gray, 2=white)
+# Output downscale factor. Halving each axis quarters the pixel count and,
+# combined with grayscale (1 channel vs 3), drops payload size by ~85% for
+# typical pages while remaining readable for Claude Vision OCR.
+RENDER_SCALE = 0.5
+
+# Brush colors (reMarkable uses 0=black, 1=gray, 2=white). Color names and
+# hex strings are accepted by PIL ImageDraw in both "RGB" and "L" modes.
 BRUSH_COLORS = {
     0: "black",
     1: "#808080",  # gray
@@ -46,7 +53,7 @@ def extract_typed_text(rm_bytes: bytes) -> str | None:
         return None
 
 
-def render_rm_to_png(rm_bytes: bytes) -> bytes:
+def render_rm_to_png(rm_bytes: bytes, scale: float = RENDER_SCALE) -> bytes:
     """Render .rm strokes to PNG image.
 
     Parses the .rm binary format using rmscene and draws strokes
@@ -55,15 +62,24 @@ def render_rm_to_png(rm_bytes: bytes) -> bytes:
 
     Args:
         rm_bytes: Raw bytes of a .rm file
+        scale: Output downscale factor (1.0 = native, 0.5 = half-size).
+            Affects canvas dimensions, X_OFFSET application, and stroke widths
+            uniformly so spatial relationships are preserved.
 
     Returns:
-        PNG image as bytes
+        PNG image as bytes (8-bit grayscale)
     """
     # Parse .rm file
     blocks = list(read_blocks(BytesIO(rm_bytes)))
 
-    # Create blank white image
-    img = Image.new("RGB", (RM_WIDTH, RM_HEIGHT), "white")
+    # Compute scaled output dimensions and offset.
+    out_w = max(1, int(RM_WIDTH * scale))
+    out_h = max(1, int(RM_HEIGHT * scale))
+    x_offset_scaled = X_OFFSET * scale
+
+    # Grayscale ("L") mode is one byte per pixel vs three for "RGB" — direct
+    # 3x payload reduction. Strokes are monochrome on white so no color is lost.
+    img = Image.new("L", (out_w, out_h), "white")
     draw = ImageDraw.Draw(img)
 
     # Draw each stroke
@@ -86,15 +102,18 @@ def render_rm_to_png(rm_bytes: bytes) -> bytes:
         if len(line.points) < 2:
             continue
 
-        # Extract points (apply X offset for center-origin coordinate system)
-        points = [(p.x + X_OFFSET, p.y) for p in line.points]
+        # Extract points: apply X offset for center-origin coordinate system,
+        # then scale into output canvas.
+        points = [((p.x + X_OFFSET) * scale, p.y * scale) for p in line.points]
 
         # Determine stroke color
         color_idx = getattr(line, "color", 0)
         color = BRUSH_COLORS.get(color_idx, "black")
 
-        # Determine stroke width (use thickness_scale or default)
-        width = max(1, int(getattr(line, "thickness_scale", 2)))
+        # Stroke width scales with canvas so visual line weight is preserved.
+        # `thickness_scale` defaults to 2; `max(1, ...)` keeps hairlines visible
+        # after scaling, especially at scale < 0.5.
+        width = max(1, int(getattr(line, "thickness_scale", 2) * scale))
 
         # Draw the stroke
         if len(points) == 2:

@@ -21,11 +21,10 @@ def test_extract_text_returns_tuple():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_message
 
-    with patch("claude_client.anthropic.Anthropic", return_value=mock_client):
-        text, confidence = extract_text_from_image(b"fake-png-data", "test-key")
+    text, confidence = extract_text_from_image(b"fake-png-data", mock_client)
 
-        assert text == "Hello world"
-        assert confidence == 1.0
+    assert text == "Hello world"
+    assert confidence == 1.0
 
 
 def test_extract_text_sends_image():
@@ -36,24 +35,23 @@ def test_extract_text_sends_image():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_message
 
-    with patch("claude_client.anthropic.Anthropic", return_value=mock_client):
-        extract_text_from_image(b"test-image-bytes", "test-key")
+    extract_text_from_image(b"test-image-bytes", mock_client)
 
-        # Verify messages.create was called
-        mock_client.messages.create.assert_called_once()
+    # Verify messages.create was called
+    mock_client.messages.create.assert_called_once()
 
-        # Check the call arguments
-        call_args = mock_client.messages.create.call_args
-        assert call_args.kwargs["model"] == "claude-sonnet-4-20250514"
-        assert call_args.kwargs["max_tokens"] == 4096
+    # Check the call arguments
+    call_args = mock_client.messages.create.call_args
+    assert call_args.kwargs["model"] == "claude-sonnet-4-20250514"
+    assert call_args.kwargs["max_tokens"] == 4096
 
-        # Check message content includes image
-        messages = call_args.kwargs["messages"]
-        assert len(messages) == 1
-        content = messages[0]["content"]
-        assert len(content) == 2
-        assert content[0]["type"] == "image"
-        assert content[1]["type"] == "text"
+    # Check message content includes image
+    messages = call_args.kwargs["messages"]
+    assert len(messages) == 1
+    content = messages[0]["content"]
+    assert len(content) == 2
+    assert content[0]["type"] == "image"
+    assert content[1]["type"] == "text"
 
 
 def test_extract_text_empty_result():
@@ -64,11 +62,10 @@ def test_extract_text_empty_result():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_message
 
-    with patch("claude_client.anthropic.Anthropic", return_value=mock_client):
-        text, confidence = extract_text_from_image(b"blank-image", "test-key")
+    text, confidence = extract_text_from_image(b"blank-image", mock_client)
 
-        assert text == ""
-        assert confidence == 1.0
+    assert text == ""
+    assert confidence == 1.0
 
 
 def test_parse_extraction_response_passes_real_text():
@@ -125,10 +122,9 @@ def test_describe_illustration_returns_string():
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_message
 
-    with patch("claude_client.anthropic.Anthropic", return_value=mock_client):
-        result = describe_illustration(b"fake-png-data", "test-key")
+    result = describe_illustration(b"fake-png-data", mock_client)
 
-        assert result == "smiling face"
+    assert result == "smiling face"
 
 
 def test_extract_text_with_drawings_adds_illustration_marker():
@@ -144,11 +140,27 @@ def test_extract_text_with_drawings_adds_illustration_marker():
     mock_client = MagicMock()
     mock_client.messages.create.side_effect = [extraction_response, description_response]
 
-    with patch("claude_client.anthropic.Anthropic", return_value=mock_client):
-        text, confidence = extract_text_from_image(b"drawing-png", "test-key")
+    text, confidence = extract_text_from_image(b"drawing-png", mock_client)
 
-        assert "[illustration: sad robot face]" in text
-        assert confidence == 1.0
+    assert "[illustration: sad robot face]" in text
+    assert confidence == 1.0
+
+
+def test_extract_text_with_drawings_reuses_client():
+    """Extraction and illustration calls share the injected client."""
+    extraction_response = MagicMock()
+    extraction_response.content = [MagicMock(text=f"NO_TEXT_FOUND\n{HAS_DRAWINGS_MARKER}")]
+    description_response = MagicMock()
+    description_response.content = [MagicMock(text="diagram")]
+
+    mock_client = MagicMock()
+    mock_client.messages.create.side_effect = [extraction_response, description_response]
+
+    extract_text_from_image(b"drawing-png", mock_client)
+
+    # Both Claude calls go through the same injected client; no
+    # second instantiation should occur (we never patch anthropic.Anthropic).
+    assert mock_client.messages.create.call_count == 2
 
 
 def test_extract_text_mixed_content():
@@ -164,10 +176,9 @@ def test_extract_text_mixed_content():
     mock_client = MagicMock()
     mock_client.messages.create.side_effect = [extraction_response, description_response]
 
-    with patch("claude_client.anthropic.Anthropic", return_value=mock_client):
-        text, confidence = extract_text_from_image(b"mixed-png", "test-key")
+    text, confidence = extract_text_from_image(b"mixed-png", mock_client)
 
-        # Should have both text and illustration marker
-        assert "# My Notes" in text
-        assert "[illustration: flowchart diagram]" in text
-        assert confidence == 1.0
+    # Should have both text and illustration marker
+    assert "# My Notes" in text
+    assert "[illustration: flowchart diagram]" in text
+    assert confidence == 1.0

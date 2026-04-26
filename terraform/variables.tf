@@ -19,7 +19,7 @@ variable "lambda_timeout" {
 }
 
 variable "lambda_memory" {
-  description = "Lambda memory in MB (more memory = more CPU)"
+  description = "Lambda memory in MB (more memory = more CPU). 2048 MB roughly doubles vCPU vs 1024 MB, which speeds up Pillow stroke rendering. The pipeline is mostly I/O-bound waiting on Claude, so the win is modest but cheap."
   type        = number
-  default     = 1024
+  default     = 2048
 }
