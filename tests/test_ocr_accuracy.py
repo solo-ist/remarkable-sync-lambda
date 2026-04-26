@@ -35,11 +35,11 @@ SAMPLE_RM = FIXTURE_DIR / "sample.rm"
 SAMPLE_EXPECTED = FIXTURE_DIR / "sample.txt"
 
 # Fraction of expected tokens that must appear in OCR output for the test
-# to pass. 0.7 is a deliberate floor — Claude Vision is not perfect on
-# cursive, and we'd rather catch *catastrophic* regressions (PNG resize
-# breaks coordinates, prompt change collapses output) than false-positive on
-# normal OCR variance.
-ACCURACY_THRESHOLD = 0.7
+# to pass. 0.95 is tight on purpose: with the bbox-driven canvas (issue #14)
+# the renderer no longer silently clips strokes, so missing >5% of distinct
+# tokens is a structural-regression signal rather than OCR variance noise.
+# Was 0.7 historically, which masked the truncation bug at 11/12 = 91.7%.
+ACCURACY_THRESHOLD = 0.95
 
 
 @pytest.fixture

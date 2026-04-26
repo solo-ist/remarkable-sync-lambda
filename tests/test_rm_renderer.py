@@ -14,11 +14,34 @@ from rm_renderer import (
     RM_WIDTH,
     RM_HEIGHT,
     RENDER_SCALE,
+    MAX_CANVAS_HEIGHT,
+    PADDING_PX,
     BRUSH_COLORS,
     extract_typed_text,
     render_rm_to_png,
     has_strokes,
 )
+
+
+def _mock_block_with_stroke(points):
+    """Build a v6-format mock block whose line has the given (x, y) points."""
+    mock_points = []
+    for x, y in points:
+        p = MagicMock()
+        p.x = x
+        p.y = y
+        mock_points.append(p)
+
+    mock_line = MagicMock()
+    mock_line.points = mock_points
+    mock_line.color = 0
+    mock_line.thickness_scale = 2
+
+    mock_item = MagicMock()
+    mock_item.value = mock_line
+    mock_block = MagicMock()
+    mock_block.item = mock_item
+    return mock_block
 
 
 def test_constants():
@@ -383,3 +406,53 @@ def test_has_strokes_v6_format():
 
     with patch("rm_renderer.read_blocks", return_value=[mock_block]):
         assert has_strokes(b"fake rm data") is True
+
+
+def test_canvas_expands_for_infinite_scroll_strokes():
+    """Strokes past RM_HEIGHT extend the canvas instead of getting clipped."""
+    from PIL import Image
+    from io import BytesIO as _BytesIO
+
+    # y=2500 is well past RM_HEIGHT (1872) — the stroke would be silently
+    # dropped if the canvas were still hardcoded to RM_HEIGHT.
+    block = _mock_block_with_stroke([(0, 2400), (100, 2500)])
+
+    with patch("rm_renderer.read_blocks", return_value=[block]):
+        png_bytes = render_rm_to_png(b"fake rm data")
+
+    img = Image.open(_BytesIO(png_bytes))
+    # Expected: (max_y_strokes + PADDING_PX) * RENDER_SCALE = (2500 + 20) * 0.5 = 1260
+    assert img.size[1] == int((2500 + PADDING_PX) * RENDER_SCALE)
+    # And it must be strictly larger than the old hardcoded height.
+    assert img.size[1] > int(RM_HEIGHT * RENDER_SCALE)
+
+
+def test_canvas_floors_at_rm_height_for_short_pages():
+    """Strokes confined to standard page bounds preserve standard canvas dims."""
+    from PIL import Image
+    from io import BytesIO as _BytesIO
+
+    # Stroke entirely within the visible page — no expansion needed.
+    block = _mock_block_with_stroke([(0, 100), (100, 500)])
+
+    with patch("rm_renderer.read_blocks", return_value=[block]):
+        png_bytes = render_rm_to_png(b"fake rm data")
+
+    img = Image.open(_BytesIO(png_bytes))
+    assert img.size == (int(RM_WIDTH * RENDER_SCALE), int(RM_HEIGHT * RENDER_SCALE))
+
+
+def test_canvas_caps_at_max_canvas_height():
+    """Pathologically tall strokes are bounded by MAX_CANVAS_HEIGHT."""
+    from PIL import Image
+    from io import BytesIO as _BytesIO
+
+    # y=20000 well exceeds MAX_CANVAS_HEIGHT (12000) — without the cap,
+    # canvas would balloon past Claude Vision's 8000² limit.
+    block = _mock_block_with_stroke([(0, 19000), (100, 20000)])
+
+    with patch("rm_renderer.read_blocks", return_value=[block]):
+        png_bytes = render_rm_to_png(b"fake rm data")
+
+    img = Image.open(_BytesIO(png_bytes))
+    assert img.size[1] == int(MAX_CANVAS_HEIGHT * RENDER_SCALE)
